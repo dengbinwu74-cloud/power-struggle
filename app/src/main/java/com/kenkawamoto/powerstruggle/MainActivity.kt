@@ -1,4 +1,4 @@
-package com.kenkawamoto.chargebattle
+package com.kenkawamoto.powerstruggle
 
 import android.os.Bundle
 import android.view.WindowManager
@@ -55,6 +55,7 @@ import androidx.compose.ui.input.pointer.changedToDown
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
@@ -66,20 +67,29 @@ import kotlin.math.sin
 import kotlin.random.Random
 
 /**
- * Phones lie on the table bottom-to-bottom, joined by the cable, with each player sitting at the
- * far end of their phone. The player therefore sees the screen upside down, so the whole UI is
+ * Two phones: they lie on the table bottom-to-bottom, joined by the cable, with each player sitting
+ * at the far end of their phone. The player therefore sees the screen upside down, so the UI is
  * rotated 180°: "up" on screen points at the cable and the opponent.
+ *
+ * One phone: the phone lies between the two players and the screen is split. Each half is drawn
+ * like a two-phone screen whose "cable edge" is the middle line.
  */
 private const val FACE_OFF = true
-
-/** Where the battery's terminal sits, as a fraction of screen height from the cable edge. */
-private const val STREAM_END = 0.42f
 
 private val ChargeIn = Color(0xFF3DDC84)
 private val ChargeOut = Color(0xFFFF7A3D)
 private val Idle = Color(0xFF9AA0A6)
 
 private enum class Flow { NONE, IN, OUT }
+
+/** What one player's view shows. [rope] is from this player's side: +1 at their battery. */
+private class PlayerSide(
+    val flow: Flow,
+    val rope: Float,
+    val batteryLevel: Int?,
+    val currentMa: Int?,
+    val label: String? = null,
+)
 
 private class Ripple(val position: Offset, val startedAt: Float)
 
@@ -103,11 +113,67 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun BattleScreen() {
     val s by Battle.state.collectAsState()
-    val flow = when {
-        !s.linkUp -> Flow.NONE
+    val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val myFlow = when {
+        s.mode == Mode.NONE -> Flow.NONE
         s.charging -> Flow.IN
         else -> Flow.OUT
     }
+    val rope = if (s.mode == Mode.NONE) 0f else s.rope
+
+    Box(Modifier.fillMaxSize().background(Color(0xFF0D0E11))) {
+        if (s.mode == Mode.ONE_PHONE) {
+            val otherFlow = when (myFlow) {
+                Flow.IN -> Flow.OUT
+                Flow.OUT -> Flow.IN
+                Flow.NONE -> Flow.NONE
+            }
+            Column(Modifier.fillMaxSize()) {
+                // This phone's player sits at the top; the status bar is along their near edge.
+                PlayerView(
+                    PlayerSide(myFlow, rope, s.batteryLevel, s.currentMa, label = "THIS PHONE"),
+                    onTap = Battle::tap,
+                    streamFraction = 0.3f,
+                    compact = true,
+                    bottomInset = statusBarHeight,
+                    modifier = Modifier.weight(1f).rotate(180f),
+                )
+                // The other phone hangs off the cable at the bottom, in front of its player.
+                PlayerView(
+                    PlayerSide(otherFlow, -rope, batteryLevel = null, currentMa = null, label = "OTHER PHONE"),
+                    onTap = Battle::tapOther,
+                    streamFraction = 0.3f,
+                    compact = true,
+                    bottomInset = 0.dp,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        } else {
+            PlayerView(
+                PlayerSide(myFlow, rope, s.batteryLevel, s.currentMa),
+                onTap = Battle::tap,
+                streamFraction = 0.42f,
+                compact = false,
+                bottomInset = statusBarHeight,
+                modifier = Modifier.fillMaxSize().rotate(if (FACE_OFF) 180f else 0f),
+                footer = { DebugFooter(s, Modifier.padding(top = 16.dp)) },
+            )
+        }
+    }
+}
+
+/** One player's view: energy stream from the cable edge (top) to their battery, and the knot. */
+@Composable
+private fun PlayerView(
+    side: PlayerSide,
+    onTap: () -> Unit,
+    streamFraction: Float,
+    compact: Boolean,
+    bottomInset: Dp,
+    modifier: Modifier = Modifier,
+    footer: (@Composable () -> Unit)? = null,
+) {
+    val flow = side.flow
     val accent by animateColorAsState(
         when (flow) {
             Flow.IN -> ChargeIn
@@ -122,51 +188,52 @@ private fun BattleScreen() {
     var lastTapAt by remember { mutableFloatStateOf(-10f) }
 
     BoxWithConstraints(
-        Modifier
-            .fillMaxSize()
-            .background(Color(0xFF0D0E11))
-            .rotate(if (FACE_OFF) 180f else 0f)
-            .pointerInput(Unit) {
-                awaitPointerEventScope {
-                    while (true) {
-                        awaitPointerEvent().changes.forEach {
-                            if (it.changedToDown()) {
-                                Battle.tap()
-                                lastTapAt = now()
-                                ripples.add(Ripple(it.position, lastTapAt))
-                                if (ripples.size > 12) ripples.removeAt(0)
-                            }
+        modifier.pointerInput(Unit) {
+            awaitPointerEventScope {
+                while (true) {
+                    awaitPointerEvent().changes.forEach {
+                        if (it.changedToDown()) {
+                            onTap()
+                            lastTapAt = now()
+                            ripples.add(Ripple(it.position, lastTapAt))
+                            if (ripples.size > 12) ripples.removeAt(0)
                         }
                     }
                 }
-            },
+            }
+        },
     ) {
-        val streamEnd = maxHeight * STREAM_END
-        // The UI is upside down, so the status bar sits along our bottom edge.
-        val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+        val streamEnd = maxHeight * streamFraction
+        val batteryHeight = if (compact) minOf(150.dp, maxHeight * 0.34f) else 200.dp
         EnergyCanvas(
             flow = flow,
-            rope = if (s.linkUp) s.rope else 0f,
+            rope = side.rope,
             color = accent,
+            streamFraction = streamFraction,
+            // Split screen shows the knot in the other half already.
+            showOffscreenKnot = !compact,
             ripples = ripples,
             lastTapAt = lastTapAt,
             now = now,
             modifier = Modifier.fillMaxSize(),
         )
         BatteryGauge(
-            s.batteryLevel, flow, accent,
+            side.batteryLevel, flow, accent,
             Modifier
                 .align(Alignment.TopCenter)
                 .offset(y = streamEnd)
-                .size(width = 120.dp, height = 200.dp),
+                .size(width = batteryHeight * 0.6f, height = batteryHeight),
         )
         Column(
             Modifier
                 .align(Alignment.TopCenter)
-                .offset(y = streamEnd + 208.dp),
+                .offset(y = streamEnd + batteryHeight + 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("${s.batteryLevel}%", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            val caption = listOfNotNull(side.label, side.batteryLevel?.let { "$it%" }).joinToString("  ·  ")
+            if (caption.isNotEmpty()) {
+                Text(caption, color = Color.White, fontSize = if (compact) 16.sp else 22.sp, fontWeight = FontWeight.Bold)
+            }
             Text(
                 when (flow) {
                     Flow.NONE -> "Connect the other phone"
@@ -174,17 +241,17 @@ private fun BattleScreen() {
                     Flow.OUT -> "DRAINING"
                 },
                 color = accent,
-                fontSize = 30.sp,
+                fontSize = if (compact) 24.sp else 30.sp,
                 fontWeight = FontWeight.Black,
             )
-            if (flow != Flow.NONE) {
-                Text("${s.currentMa.signed()} mA", color = accent.copy(alpha = 0.8f), fontSize = 16.sp)
+            if (flow != Flow.NONE && side.currentMa != null) {
+                Text("${side.currentMa.signed()} mA", color = accent.copy(alpha = 0.8f), fontSize = 16.sp)
             }
         }
         Column(
             Modifier
                 .align(Alignment.BottomCenter)
-                .padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 12.dp + statusBarHeight),
+                .padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 12.dp + bottomInset),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
@@ -197,7 +264,7 @@ private fun BattleScreen() {
                 fontSize = if (flow == Flow.OUT) 22.sp else 16.sp,
                 fontWeight = FontWeight.Bold,
             )
-            DebugFooter(s, Modifier.padding(top = 16.dp))
+            footer?.invoke()
         }
     }
 }
@@ -212,6 +279,8 @@ private fun EnergyCanvas(
     flow: Flow,
     rope: Float,
     color: Color,
+    streamFraction: Float,
+    showOffscreenKnot: Boolean,
     ripples: List<Ripple>,
     lastTapAt: Float,
     now: () -> Float,
@@ -234,7 +303,7 @@ private fun EnergyCanvas(
         val knot = smooth[0]
 
         val cx = size.width / 2
-        val length = size.height * STREAM_END
+        val length = size.height * streamFraction
         val intensity = abs(knot).coerceIn(0.15f, 1f)
 
         // Beam.
@@ -278,7 +347,7 @@ private fun EnergyCanvas(
             drawCircle(Color.White.copy(alpha = 0.15f), 34.dp.toPx() * pulse, pos)
             drawCircle(Color.White, 15.dp.toPx() * pulse, pos, style = Stroke(4.dp.toPx()))
             drawCircle(Color.White, 7.dp.toPx(), pos)
-        } else {
+        } else if (showOffscreenKnot) {
             // Knot is on their phone: glow at the cable edge, brighter the further away it is.
             drawCircle(Color.White.copy(alpha = 0.08f + 0.2f * -knot), (24 + 50 * -knot).dp.toPx(), Offset(cx, 0f))
         }
@@ -299,7 +368,7 @@ private fun EnergyCanvas(
 }
 
 @Composable
-private fun BatteryGauge(level: Int, flow: Flow, color: Color, modifier: Modifier) {
+private fun BatteryGauge(level: Int?, flow: Flow, color: Color, modifier: Modifier) {
     val pulse by rememberInfiniteTransition(label = "pulse").animateFloat(
         initialValue = 1f,
         targetValue = 0.45f,
@@ -329,7 +398,8 @@ private fun BatteryGauge(level: Int, flow: Flow, color: Color, modifier: Modifie
             )
             val inset = stroke * 2
             val innerH = bodyH - inset * 2
-            val fillH = innerH * level.coerceIn(0, 100) / 100f
+            // Unknown level (the other phone without the app): show it half full.
+            val fillH = innerH * (level ?: 50).coerceIn(0, 100) / 100f
             drawRoundRect(
                 color.copy(alpha = if (flow == Flow.OUT) pulse else 1f),
                 topLeft = Offset(inset, bodyTop + inset + innerH - fillH),

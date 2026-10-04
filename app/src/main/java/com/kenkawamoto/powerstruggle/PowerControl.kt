@@ -1,4 +1,4 @@
-package com.kenkawamoto.chargebattle
+package com.kenkawamoto.powerstruggle
 
 import android.content.ComponentName
 import android.content.Context

@@ -1,4 +1,4 @@
-package com.kenkawamoto.chargebattle
+package com.kenkawamoto.powerstruggle
 
 import kotlin.system.exitProcess
 

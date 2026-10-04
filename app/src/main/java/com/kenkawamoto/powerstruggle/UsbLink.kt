@@ -1,4 +1,4 @@
-package com.kenkawamoto.chargebattle
+package com.kenkawamoto.powerstruggle
 
 import android.app.PendingIntent
 import android.content.Context
@@ -88,7 +88,7 @@ class Link(
 
 private fun permissionIntent(context: Context) = PendingIntent.getBroadcast(
     context, 0,
-    Intent("com.kenkawamoto.chargebattle.USB_PERMISSION").setPackage(context.packageName),
+    Intent("com.kenkawamoto.powerstruggle.USB_PERMISSION").setPackage(context.packageName),
     PendingIntent.FLAG_MUTABLE,
 )
 

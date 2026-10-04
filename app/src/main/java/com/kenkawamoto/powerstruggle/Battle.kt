@@ -1,4 +1,4 @@
-package com.kenkawamoto.chargebattle
+package com.kenkawamoto.powerstruggle
 
 import android.annotation.SuppressLint
 import android.content.Context
@@ -24,10 +24,18 @@ import java.util.concurrent.atomic.AtomicInteger
 
 enum class Role { STARTING, REFEREE, PLAYER }
 
+/**
+ * TWO_PHONES: the other phone runs the app and shows its own side.
+ * ONE_PHONE: the other phone is connected but not running the app (e.g. not installed yet), so
+ * this phone shows both players, split screen.
+ */
+enum class Mode { NONE, ONE_PHONE, TWO_PHONES }
+
 data class BattleState(
     val role: Role = Role.STARTING,
     val setup: String = "Starting…",
     val linkUp: Boolean = false,
+    val mode: Mode = Mode.NONE,
     val myTaps: Int = 0,
     /** Knot position from this phone's view: +1 at my battery, 0 at the cable, -1 at theirs. */
     val rope: Float = 0f,
@@ -65,6 +73,8 @@ object Battle {
     private const val TAP_PULL = 0.07f
     private const val SPRING_BACK_PER_SEC = 0.35f
     const val SWAP_THRESHOLD = 0.15f
+    /** The peer counts as running the app while we've heard from it this recently. */
+    private const val PEER_TIMEOUT_MS = 2000L
     private const val MIN_SWAP_INTERVAL_MS = 1000L
     private const val GAP_LOG_THRESHOLD_MS = 300L
 
@@ -76,6 +86,8 @@ object Battle {
     private var started = false
 
     @Volatile private var link: Link? = null
+    @Volatile private var linkOpenedAt = 0L
+    @Volatile private var peerActive = false
 
     // Referee-only game state.
     private val myPendingTaps = AtomicInteger()
@@ -85,7 +97,7 @@ object Battle {
 
     // Link health.
     private val rxTimes = ArrayDeque<Long>()
-    private var lastRxAt = 0L
+    @Volatile private var lastRxAt = 0L
 
     private fun now() = SystemClock.elapsedRealtime()
 
@@ -105,6 +117,11 @@ object Battle {
             Role.PLAYER -> link?.send("T")
             Role.STARTING -> {}
         }
+    }
+
+    /** One-phone mode: a tap from the other player's half of the screen. */
+    fun tapOther() {
+        if (state.value.mode == Mode.ONE_PHONE) theirPendingTaps.incrementAndGet()
     }
 
     fun manualSwap() {
@@ -169,7 +186,7 @@ object Battle {
         scope.launch {
             var seq = 0
             while (true) {
-                link?.send("H ${seq++}")
+                sendToPeer("H ${seq++}")
                 delay(TICK_MS)
             }
         }
@@ -189,8 +206,11 @@ object Battle {
                     .getOrNull()
                 if (opened != null) {
                     synchronized(rxTimes) { rxTimes.clear(); lastRxAt = 0 }
+                    linkOpenedAt = now()
                     link = opened
-                    state.update { it.copy(linkUp = true, maxGapMs = 0) }
+                    state.update {
+                        it.copy(linkUp = true, maxGapMs = 0, mode = if (it.role == Role.PLAYER) Mode.TWO_PHONES else it.mode)
+                    }
                     log("Link up")
                 }
             } else if (!stillAttached()) {
@@ -202,7 +222,14 @@ object Battle {
 
     private fun onLinkClosed() {
         link = null
-        state.update { it.copy(linkUp = false, peerCharging = null, linkDrops = it.linkDrops + 1) }
+        state.update {
+            it.copy(
+                linkUp = false,
+                peerCharging = null,
+                linkDrops = it.linkDrops + 1,
+                mode = if (it.role == Role.PLAYER) Mode.NONE else it.mode,
+            )
+        }
         log("Link down")
     }
 
@@ -246,15 +273,22 @@ object Battle {
             last = t
             val pull = myPendingTaps.getAndSet(0) - theirPendingTaps.getAndSet(0)
             val currentLink = link
-            rope = if (currentLink == null) {
+            peerActive = currentLink != null && t - lastRxAt < PEER_TIMEOUT_MS
+            val mode = when {
+                peerActive -> Mode.TWO_PHONES
+                // The accessory link is open but silent: the other phone isn't running the app.
+                currentLink != null && t - linkOpenedAt > PEER_TIMEOUT_MS -> Mode.ONE_PHONE
+                else -> Mode.NONE
+            }
+            rope = if (mode == Mode.NONE) {
                 0f
             } else {
                 (rope + pull * TAP_PULL) * (1f - SPRING_BACK_PER_SEC * dt)
             }.coerceIn(-1f, 1f)
-            state.update { it.copy(rope = rope) }
-            currentLink?.send("S ${"%.3f".format(Locale.US, -rope)}")
+            state.update { it.copy(rope = rope, mode = mode) }
+            sendToPeer("S ${"%.3f".format(Locale.US, -rope)}")
 
-            if (currentLink != null && t - lastSwapAt >= MIN_SWAP_INTERVAL_MS) {
+            if (mode != Mode.NONE && t - lastSwapAt >= MIN_SWAP_INTERVAL_MS) {
                 when {
                     rope > SWAP_THRESHOLD && refereePowerRole != "sink" -> swapTo("sink")
                     rope < -SWAP_THRESHOLD && refereePowerRole != "source" -> swapTo("source")
@@ -279,6 +313,14 @@ object Battle {
         }
     }
 
+    /**
+     * The referee only writes once the peer app is talking: with nobody reading the accessory end,
+     * bulk writes would block and pile up.
+     */
+    private fun sendToPeer(line: String) {
+        if (state.value.role == Role.PLAYER || peerActive) link?.send(line)
+    }
+
     private suspend fun batteryLoop() {
         val battery = app.getSystemService(BatteryManager::class.java)
         var ticks = 0
@@ -289,7 +331,7 @@ object Battle {
             // Positive = into the battery, in µA on Pixels.
             val ma = battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW) / 1000
             state.update { it.copy(charging = plugged, currentMa = ma, batteryLevel = level) }
-            if (ticks++ % 2 == 0) link?.send("B ${if (plugged) 1 else 0} $ma $level")
+            if (ticks++ % 2 == 0) sendToPeer("B ${if (plugged) 1 else 0} $ma $level")
             delay(250)
         }
     }

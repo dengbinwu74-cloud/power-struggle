@@ -1,4 +1,4 @@
-package com.kenkawamoto.chargebattle;
+package com.kenkawamoto.powerstruggle;
 
 // Runs inside a Shizuku user service process with shell uid.
 interface IShellService {

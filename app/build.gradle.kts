@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.kenkawamoto.chargebattle"
+    namespace = "com.kenkawamoto.powerstruggle"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.kenkawamoto.chargebattle"
+        applicationId = "com.kenkawamoto.powerstruggle"
         minSdk = 33
         targetSdk = 36
         versionCode = 1
