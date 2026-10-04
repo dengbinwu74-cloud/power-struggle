@@ -26,8 +26,8 @@ enum class Role { STARTING, REFEREE, PLAYER }
 
 /**
  * TWO_PHONES: the other phone runs the app and shows its own side.
- * ONE_PHONE: the other phone is connected but not running the app (e.g. not installed yet), so
- * this phone shows both players, split screen.
+ * ONE_PHONE: the other device is connected but not running the app (not installed yet, or an
+ * iPad/iPhone, which can't talk the accessory protocol), so this phone shows both players.
  */
 enum class Mode { NONE, ONE_PHONE, TWO_PHONES }
 
@@ -36,6 +36,8 @@ data class BattleState(
     val setup: String = "Starting…",
     val linkUp: Boolean = false,
     val mode: Mode = Mode.NONE,
+    /** Product name of the USB partner, as seen by the referee. */
+    val partnerName: String? = null,
     val myTaps: Int = 0,
     /** Knot position from this phone's view: +1 at my battery, 0 at the cable, -1 at theirs. */
     val rope: Float = 0f,
@@ -88,6 +90,7 @@ object Battle {
     @Volatile private var link: Link? = null
     @Volatile private var linkOpenedAt = 0L
     @Volatile private var peerActive = false
+    @Volatile private var aoaHost: AoaHost? = null
 
     // Referee-only game state.
     private val myPendingTaps = AtomicInteger()
@@ -161,6 +164,7 @@ object Battle {
 
         scope.launch { refereeTickLoop() }
         val host = AoaHost(app, ::log)
+        aoaHost = host
         connectLoop({ onLine, onClosed ->
             ensureUsbHost()
             host.tryConnect(onLine, onClosed)
@@ -278,6 +282,7 @@ object Battle {
                 peerActive -> Mode.TWO_PHONES
                 // The accessory link is open but silent: the other phone isn't running the app.
                 currentLink != null && t - linkOpenedAt > PEER_TIMEOUT_MS -> Mode.ONE_PHONE
+                currentLink == null && aoaHost?.partnerWithoutAoa == true -> Mode.ONE_PHONE
                 else -> Mode.NONE
             }
             rope = if (mode == Mode.NONE) {
@@ -285,7 +290,7 @@ object Battle {
             } else {
                 (rope + pull * TAP_PULL) * (1f - SPRING_BACK_PER_SEC * dt)
             }.coerceIn(-1f, 1f)
-            state.update { it.copy(rope = rope, mode = mode) }
+            state.update { it.copy(rope = rope, mode = mode, partnerName = aoaHost?.partnerName) }
             sendToPeer("S ${"%.3f".format(Locale.US, -rope)}")
 
             if (mode != Mode.NONE && t - lastSwapAt >= MIN_SWAP_INTERVAL_MS) {

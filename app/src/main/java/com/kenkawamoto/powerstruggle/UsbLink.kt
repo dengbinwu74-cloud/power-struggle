@@ -22,6 +22,7 @@ const val ACCESSORY_MODEL = "Referee"
 private const val ACCESSORY_URI = "https://kenkawamoto.com" // TODO: Play Store link
 
 private const val GOOGLE_VID = 0x18D1
+private const val APPLE_VID = 0x05AC
 private val AOA_PIDS = 0x2D00..0x2D05
 private const val AOA_GET_PROTOCOL = 51
 private const val AOA_SEND_STRING = 52
@@ -97,8 +98,27 @@ class AoaHost(private val context: Context, private val log: (String) -> Unit) {
     private val usb = context.getSystemService(UsbManager::class.java)
     private var permissionRequestedFor: String? = null
 
+    /** Product name of the connected USB device, if any. */
+    @Volatile var partnerName: String? = null
+        private set
+
+    /**
+     * The connected device can't run the accessory protocol (e.g. an iPad or iPhone). It can still
+     * swap power, so it is played against in one-phone mode.
+     */
+    @Volatile var partnerWithoutAoa = false
+        private set
+    private var noAoaDevice: String? = null
+
     fun tryConnect(onLine: (String) -> Unit, onClosed: () -> Unit): Link? {
-        val device = usb.deviceList.values.firstOrNull() ?: return null
+        val device = usb.deviceList.values.firstOrNull()
+        partnerName = device?.productName
+        partnerWithoutAoa = device != null && device.deviceName == noAoaDevice
+        if (device == null || partnerWithoutAoa) return null
+        if (device.vendorId == APPLE_VID) {
+            markWithoutAoa(device)
+            return null
+        }
         if (!usb.hasPermission(device)) {
             if (permissionRequestedFor != device.deviceName) {
                 permissionRequestedFor = device.deviceName
@@ -120,7 +140,7 @@ class AoaHost(private val context: Context, private val log: (String) -> Unit) {
             val buf = ByteArray(2)
             val read = conn.controlTransfer(0xC0, AOA_GET_PROTOCOL, 0, 0, buf, 2, 1000)
             val protocol = (buf[1].toInt() shl 8) or (buf[0].toInt() and 0xFF)
-            if (read < 0 || protocol < 1) return log("${device.productName} doesn't support AOA")
+            if (read < 0 || protocol < 1) return markWithoutAoa(device)
             listOf(ACCESSORY_MANUFACTURER, ACCESSORY_MODEL, "Power Struggle referee", "1", ACCESSORY_URI, "0")
                 .forEachIndexed { index, s ->
                     val bytes = (s + "\u0000").toByteArray()
@@ -131,6 +151,12 @@ class AoaHost(private val context: Context, private val log: (String) -> Unit) {
         } finally {
             conn.close()
         }
+    }
+
+    private fun markWithoutAoa(device: UsbDevice) {
+        noAoaDevice = device.deviceName
+        partnerWithoutAoa = true
+        log("${device.productName} can't run the app over USB: one-phone mode")
     }
 
     private fun open(device: UsbDevice, onLine: (String) -> Unit, onClosed: () -> Unit): Link? {

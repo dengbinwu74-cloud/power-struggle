@@ -140,7 +140,7 @@ private fun BattleScreen() {
                 )
                 // The other phone hangs off the cable at the bottom, in front of its player.
                 PlayerView(
-                    PlayerSide(otherFlow, -rope, batteryLevel = null, currentMa = null, label = "OTHER PHONE"),
+                    PlayerSide(otherFlow, -rope, batteryLevel = null, currentMa = null, label = s.partnerName?.uppercase() ?: "OTHER PHONE"),
                     onTap = Battle::tapOther,
                     streamFraction = 0.3f,
                     compact = true,
