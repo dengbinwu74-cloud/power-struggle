@@ -70,7 +70,7 @@ data class BattleState(
  */
 @SuppressLint("StaticFieldLeak") // Holds the application context only.
 object Battle {
-    private const val TAG = "ChargeBattle"
+    private const val TAG = "PowerStruggle"
     private const val TICK_MS = 50L
     private const val TAP_PULL = 0.07f
     private const val SPRING_BACK_PER_SEC = 0.35f

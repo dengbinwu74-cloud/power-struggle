@@ -14,12 +14,13 @@ import java.io.IOException
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
 
-private const val TAG = "ChargeBattle"
+private const val TAG = "PowerStruggle"
 
 // Android Open Accessory identity. The player app's accessory_filter.xml matches these.
 const val ACCESSORY_MANUFACTURER = "Power Struggle"
 const val ACCESSORY_MODEL = "Referee"
-private const val ACCESSORY_URI = "https://kenkawamoto.com" // TODO: Play Store link
+// Offered to the other phone when it does not have the app installed.
+private const val ACCESSORY_URI = "https://ideas.skip.work/u/kenkawakenkenke/projects/power-struggle"
 
 private const val GOOGLE_VID = 0x18D1
 private const val APPLE_VID = 0x05AC
