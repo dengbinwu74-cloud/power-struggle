@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "charge-battle"
+rootProject.name = "power-struggle"
 include(":app")

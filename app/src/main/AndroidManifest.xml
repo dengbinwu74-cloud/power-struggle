@@ -5,7 +5,9 @@
     <uses-feature android:name="android.hardware.usb.accessory" android:required="false" />
 
     <application
-        android:label="Charge Battle"
+        android:icon="@mipmap/ic_launcher"
+        android:label="Power Struggle"
+        android:roundIcon="@mipmap/ic_launcher"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
         <activity

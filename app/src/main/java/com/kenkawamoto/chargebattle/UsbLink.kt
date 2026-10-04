@@ -17,7 +17,7 @@ import kotlin.concurrent.thread
 private const val TAG = "ChargeBattle"
 
 // Android Open Accessory identity. The player app's accessory_filter.xml matches these.
-const val ACCESSORY_MANUFACTURER = "Charge Battle"
+const val ACCESSORY_MANUFACTURER = "Power Struggle"
 const val ACCESSORY_MODEL = "Referee"
 private const val ACCESSORY_URI = "https://kenkawamoto.com" // TODO: Play Store link
 
@@ -121,7 +121,7 @@ class AoaHost(private val context: Context, private val log: (String) -> Unit) {
             val read = conn.controlTransfer(0xC0, AOA_GET_PROTOCOL, 0, 0, buf, 2, 1000)
             val protocol = (buf[1].toInt() shl 8) or (buf[0].toInt() and 0xFF)
             if (read < 0 || protocol < 1) return log("${device.productName} doesn't support AOA")
-            listOf(ACCESSORY_MANUFACTURER, ACCESSORY_MODEL, "Charge Battle referee", "1", ACCESSORY_URI, "0")
+            listOf(ACCESSORY_MANUFACTURER, ACCESSORY_MODEL, "Power Struggle referee", "1", ACCESSORY_URI, "0")
                 .forEachIndexed { index, s ->
                     val bytes = (s + "\u0000").toByteArray()
                     conn.controlTransfer(0x40, AOA_SEND_STRING, 0, index, bytes, bytes.size, 1000)
