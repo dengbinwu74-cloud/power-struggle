@@ -15,12 +15,12 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
@@ -30,6 +30,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
@@ -42,6 +44,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.changedToDown
 import androidx.compose.ui.input.pointer.pointerInput
@@ -53,6 +56,8 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import kotlin.math.abs
+import kotlin.math.min
+import kotlin.math.sin
 import kotlin.random.Random
 
 /**
@@ -62,11 +67,18 @@ import kotlin.random.Random
  */
 private const val FACE_OFF = true
 
+/** Where the battery's terminal sits, as a fraction of screen height from the cable edge. */
+private const val STREAM_END = 0.42f
+
 private val ChargeIn = Color(0xFF3DDC84)
 private val ChargeOut = Color(0xFFFF7A3D)
 private val Idle = Color(0xFF9AA0A6)
 
 private enum class Flow { NONE, IN, OUT }
+
+private class Ripple(val position: Offset, val startedAt: Float)
+
+private class Particle(val lane: Float, val phase: Float, val size: Float)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -98,8 +110,12 @@ private fun BattleScreen() {
         },
         label = "accent",
     )
+    val startNanos = remember { System.nanoTime() }
+    val now = remember { { (System.nanoTime() - startNanos) / 1e9f } }
+    val ripples = remember { mutableStateListOf<Ripple>() }
+    var lastTapAt by remember { mutableFloatStateOf(-10f) }
 
-    Box(
+    BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .background(Color(0xFF0D0E11))
@@ -107,30 +123,41 @@ private fun BattleScreen() {
             .pointerInput(Unit) {
                 awaitPointerEventScope {
                     while (true) {
-                        awaitPointerEvent().changes.forEach { if (it.changedToDown()) Battle.tap() }
+                        awaitPointerEvent().changes.forEach {
+                            if (it.changedToDown()) {
+                                Battle.tap()
+                                lastTapAt = now()
+                                ripples.add(Ripple(it.position, lastTapAt))
+                                if (ripples.size > 12) ripples.removeAt(0)
+                            }
+                        }
                     }
                 }
             },
     ) {
-        // The battery sits at 45% of the height; the stream runs between it and the cable edge (top).
-        EnergyStream(flow, abs(s.currentMa), accent, batteryTop = 0.33f, modifier = Modifier.fillMaxSize())
-
+        val streamEnd = maxHeight * STREAM_END
+        EnergyCanvas(
+            flow = flow,
+            rope = if (s.linkUp) s.rope else 0f,
+            color = accent,
+            ripples = ripples,
+            lastTapAt = lastTapAt,
+            now = now,
+            modifier = Modifier.fillMaxSize(),
+        )
+        BatteryGauge(
+            s.batteryLevel, flow, accent,
+            Modifier
+                .align(Alignment.TopCenter)
+                .offset(y = streamEnd)
+                .size(width = 120.dp, height = 200.dp),
+        )
         Column(
             Modifier
-                .fillMaxSize()
-                .padding(horizontal = 24.dp, vertical = 20.dp),
+                .align(Alignment.TopCenter)
+                .offset(y = streamEnd + 216.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(
-                if (s.linkUp) "THEM  ${s.theirRate}" else "",
-                color = if (s.leader == Side.THEM) Color.White else Color.White.copy(alpha = 0.45f),
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(top = 56.dp),
-            )
-            Spacer(Modifier.weight(1f))
-            BatteryGauge(s.batteryLevel, flow, accent, Modifier.size(width = 130.dp, height = 220.dp))
-            Spacer(Modifier.height(20.dp))
             Text(
                 when (flow) {
                     Flow.NONE -> "Connect the other phone"
@@ -144,62 +171,122 @@ private fun BattleScreen() {
             if (flow != Flow.NONE) {
                 Text("${s.currentMa.signed()} mA", color = accent.copy(alpha = 0.8f), fontSize = 16.sp)
             }
-            Spacer(Modifier.weight(1.3f))
+        }
+        Column(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .padding(horizontal = 24.dp, vertical = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
             Text(
-                if (s.linkUp) "YOU  ${s.myRate}" else "",
-                color = if (s.leader == Side.ME) Color.White else Color.White.copy(alpha = 0.45f),
-                fontSize = 36.sp,
-                fontWeight = FontWeight.Black,
+                when (flow) {
+                    Flow.NONE -> ""
+                    Flow.IN -> "keep tapping to hold it"
+                    Flow.OUT -> "TAP TO PULL IT BACK!"
+                },
+                color = Color.White.copy(alpha = if (flow == Flow.OUT) 0.9f else 0.4f),
+                fontSize = if (flow == Flow.OUT) 22.sp else 16.sp,
+                fontWeight = FontWeight.Bold,
             )
-            Text("tap anywhere", color = Color.White.copy(alpha = 0.35f), fontSize = 14.sp)
-            Spacer(Modifier.height(16.dp))
-            DebugFooter(s)
+            DebugFooter(s, Modifier.padding(top = 16.dp))
         }
     }
 }
 
 /**
- * Particles travelling between the battery and the cable edge (y = 0). Outflow runs up towards
- * the cable, inflow comes down from it, so on two phones the stream reads as one continuous flow.
+ * The energy stream runs from the cable edge (y = 0) to the battery terminal. Particles flow in
+ * the real direction of charge; the knot rides on the stream at the tug position. A knot on the
+ * other phone lies off the top edge, which lines up with where it is drawn on that phone.
  */
 @Composable
-private fun EnergyStream(flow: Flow, currentMa: Int, color: Color, batteryTop: Float, modifier: Modifier) {
-    val particles = remember { List(70) { Particle(Random.nextFloat(), Random.nextFloat(), Random.nextFloat()) } }
-    var time by remember { mutableFloatStateOf(0f) }
+private fun EnergyCanvas(
+    flow: Flow,
+    rope: Float,
+    color: Color,
+    ripples: List<Ripple>,
+    lastTapAt: Float,
+    now: () -> Float,
+    modifier: Modifier,
+) {
+    var frame by remember { mutableLongStateOf(0L) }
     LaunchedEffect(Unit) {
-        var last = 0L
-        while (true) {
-            withFrameNanos { now ->
-                if (last != 0L) time += (now - last) / 1e9f
-                last = now
+        while (true) withFrameNanos { frame = it }
+    }
+    val particles = remember { List(80) { Particle(Random.nextFloat(), Random.nextFloat(), Random.nextFloat()) } }
+    // [displayed knot position, time of last frame]; smooths the 20 Hz updates from the referee.
+    val smooth = remember { floatArrayOf(0f, 0f) }
+
+    Canvas(modifier) {
+        frame // Redraw every frame.
+        val t = now()
+        val dt = (t - smooth[1]).coerceIn(0f, 0.1f)
+        smooth[1] = t
+        smooth[0] += (rope - smooth[0]) * min(1f, dt * 12f)
+        val knot = smooth[0]
+
+        val cx = size.width / 2
+        val length = size.height * STREAM_END
+        val intensity = abs(knot).coerceIn(0.15f, 1f)
+
+        // Beam.
+        val beamAlpha = if (flow == Flow.NONE) 0.15f else 0.25f + 0.45f * intensity
+        drawLine(color.copy(alpha = beamAlpha * 0.25f), Offset(cx, 0f), Offset(cx, length), strokeWidth = (14 + 22 * intensity).dp.toPx())
+        drawLine(color.copy(alpha = beamAlpha), Offset(cx, 0f), Offset(cx, length), strokeWidth = 3.dp.toPx())
+        drawLine(color.copy(alpha = 0.9f), Offset(cx, 0f), Offset(cx, 32.dp.toPx()), strokeWidth = 12.dp.toPx(), cap = StrokeCap.Round)
+
+        // Swap line: the knot has to pass this for power to come to you.
+        val swapY = Battle.SWAP_THRESHOLD * length
+        listOf(-1f, 1f).forEach { side ->
+            drawLine(
+                Color.White.copy(alpha = 0.35f),
+                Offset(cx + side * 26.dp.toPx(), swapY), Offset(cx + side * 46.dp.toPx(), swapY),
+                strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round,
+            )
+        }
+
+        // Particles.
+        if (flow != Flow.NONE) {
+            val speed = 0.3f + 1.1f * intensity
+            val count = (20 + 60 * intensity).toInt()
+            particles.take(count).forEach { p ->
+                val progress = (p.phase + t * speed * (0.75f + 0.5f * p.size)) % 1f
+                val fromCable = if (flow == Flow.IN) progress else 1f - progress
+                val wiggle = sin(t * 3f + p.phase * 20f) * 5.dp.toPx()
+                val x = cx + (p.lane - 0.5f) * size.width * (0.08f + 0.35f * fromCable) + wiggle
+                val pos = Offset(x, fromCable * length)
+                val fade = minOf(1f, progress * 5f, (1f - progress) * 5f)
+                val r = (2.5f + 4f * p.size).dp.toPx()
+                drawCircle(color.copy(alpha = 0.18f * fade), r * 2.8f, pos)
+                drawCircle(color.copy(alpha = 0.9f * fade), r, pos)
+            }
+        }
+
+        // Knot.
+        if (knot >= 0f) {
+            val pulse = 1f + 0.35f * kotlin.math.exp(-(t - lastTapAt) * 10f)
+            val pos = Offset(cx, knot * length)
+            drawCircle(Color.White.copy(alpha = 0.15f), 34.dp.toPx() * pulse, pos)
+            drawCircle(Color.White, 15.dp.toPx() * pulse, pos, style = Stroke(4.dp.toPx()))
+            drawCircle(Color.White, 7.dp.toPx(), pos)
+        } else {
+            // Knot is on their phone: glow at the cable edge, brighter the further away it is.
+            drawCircle(Color.White.copy(alpha = 0.08f + 0.2f * -knot), (24 + 50 * -knot).dp.toPx(), Offset(cx, 0f))
+        }
+
+        // Tap ripples.
+        ripples.forEach { ripple ->
+            val age = (t - ripple.startedAt) / 0.45f
+            if (age in 0f..1f) {
+                drawCircle(
+                    Color.White.copy(alpha = 0.5f * (1f - age)),
+                    (12 + 70 * age).dp.toPx(),
+                    ripple.position,
+                    style = Stroke(3.dp.toPx()),
+                )
             }
         }
     }
-    Canvas(modifier) {
-        val cableX = size.width / 2
-        val endY = size.height * batteryTop
-        // The cable stub at the port edge.
-        drawLine(
-            color.copy(alpha = if (flow == Flow.NONE) 0.25f else 0.9f),
-            Offset(cableX, 0f), Offset(cableX, 36.dp.toPx()),
-            strokeWidth = 10.dp.toPx(), cap = StrokeCap.Round,
-        )
-        if (flow == Flow.NONE) return@Canvas
-        // Stream speed (fraction of the path per second) follows the real current.
-        val speed = 0.35f + currentMa.coerceIn(0, 2000) / 2000f * 0.9f
-        particles.forEach { p ->
-            val progress = (p.phase + time * speed * (0.75f + 0.5f * p.size)) % 1f
-            val fromCable = if (flow == Flow.IN) progress else 1f - progress
-            val y = fromCable * endY
-            // Narrow at the cable, fanning out towards the battery.
-            val x = cableX + (p.lane - 0.5f) * size.width * 0.45f * fromCable
-            val fade = minOf(1f, progress * 4f, (1f - progress) * 4f)
-            drawCircle(color.copy(alpha = 0.85f * fade), radius = (2.5f + 4f * p.size).dp.toPx(), center = Offset(x, y))
-        }
-    }
 }
-
-private class Particle(val lane: Float, val phase: Float, val size: Float)
 
 @Composable
 private fun BatteryGauge(level: Int, flow: Flow, color: Color, modifier: Modifier) {
@@ -241,16 +328,11 @@ private fun BatteryGauge(level: Int, flow: Flow, color: Color, modifier: Modifie
             )
             if (flow == Flow.IN) drawBolt(Offset(size.width / 2, bodyTop + bodyH / 2), bodyH * 0.45f)
         }
-        Text(
-            "$level%",
-            color = Color.White,
-            fontSize = 26.sp,
-            fontWeight = FontWeight.Black,
-        )
+        Text("$level%", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Black)
     }
 }
 
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBolt(center: Offset, h: Float) {
+private fun DrawScope.drawBolt(center: Offset, h: Float) {
     val w = h * 0.55f
     val path = Path().apply {
         moveTo(center.x + w * 0.15f, center.y - h / 2)
@@ -265,16 +347,18 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBolt(center: Of
 }
 
 @Composable
-private fun DebugFooter(s: BattleState) {
+private fun DebugFooter(s: BattleState, modifier: Modifier = Modifier) {
     val peer = when (s.peerCharging) {
         null -> "?"
         true -> "charging ${s.peerCurrentMa.signed()} mA, ${s.peerBatteryLevel}%"
         false -> "draining ${s.peerCurrentMa.signed()} mA, ${s.peerBatteryLevel}%"
     }
-    Column(Modifier.fillMaxWidth()) {
+    Column(modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "${s.role} · ${s.setup}\nlink ${s.rxPerSec}/s · gap ${s.maxGapMs}ms · drops ${s.linkDrops} · swaps ${s.swaps}\npeer: $peer",
+                "${s.role} · ${s.setup} · rope ${"%.2f".format(s.rope)}\n" +
+                    "link ${s.rxPerSec}/s · gap ${s.maxGapMs}ms · drops ${s.linkDrops} · swaps ${s.swaps}\n" +
+                    "peer: $peer",
                 color = Color.White.copy(alpha = 0.35f),
                 fontSize = 10.sp,
                 fontFamily = FontFamily.Monospace,

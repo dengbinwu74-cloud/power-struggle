@@ -20,18 +20,17 @@ import rikka.shizuku.Shizuku
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
 
 enum class Role { STARTING, REFEREE, PLAYER }
-enum class Side { ME, THEM, NONE }
 
 data class BattleState(
     val role: Role = Role.STARTING,
     val setup: String = "Starting…",
     val linkUp: Boolean = false,
     val myTaps: Int = 0,
-    val myRate: Int = 0,
-    val theirRate: Int = 0,
-    val leader: Side = Side.NONE,
+    /** Knot position from this phone's view: +1 at my battery, 0 at the cable, -1 at theirs. */
+    val rope: Float = 0f,
     val charging: Boolean = false,
     val currentMa: Int = 0,
     val batteryLevel: Int = 0,
@@ -46,7 +45,9 @@ data class BattleState(
 )
 
 /**
- * Tug-of-war tap game. Whoever has tapped more in the last [WINDOW_MS] gets charged.
+ * Tug-of-war tap game. Every tap pulls a knot along the energy stream towards the tapper; the
+ * knot slowly springs back towards the cable. Once the knot is [SWAP_THRESHOLD] past the cable on
+ * your side, power swaps so that you are charged.
  *
  * The phone with Shizuku is the referee: it owns the game state, is the USB host, and swaps
  * power roles. The other phone is the player: it sends taps and shows what the referee says.
@@ -54,15 +55,17 @@ data class BattleState(
  *
  * Wire protocol (newline-delimited):
  *   player → referee: `T` (one tap), `H <seq>` (heartbeat)
- *   referee → player: `S <refereeRate> <playerRate> <R|P|N leader>` (every tick)
+ *   referee → player: `S <rope>` (every tick, from the player's view)
  *   both ways:        `B <plugged 0|1> <battery mA> <battery %>`
  */
 @SuppressLint("StaticFieldLeak") // Holds the application context only.
 object Battle {
     private const val TAG = "ChargeBattle"
-    private const val WINDOW_MS = 2000L
-    private const val MIN_SWAP_INTERVAL_MS = 2500L
-    private const val TICK_MS = 100L
+    private const val TICK_MS = 50L
+    private const val TAP_PULL = 0.07f
+    private const val SPRING_BACK_PER_SEC = 0.35f
+    const val SWAP_THRESHOLD = 0.15f
+    private const val MIN_SWAP_INTERVAL_MS = 1000L
     private const val GAP_LOG_THRESHOLD_MS = 300L
 
     val state = MutableStateFlow(BattleState())
@@ -75,8 +78,8 @@ object Battle {
     @Volatile private var link: Link? = null
 
     // Referee-only game state.
-    private val myTapTimes = ArrayDeque<Long>()
-    private val theirTapTimes = ArrayDeque<Long>()
+    private val myPendingTaps = AtomicInteger()
+    private val theirPendingTaps = AtomicInteger()
     @Volatile private var refereePowerRole: String? = null
     @Volatile private var lastSwapAt = 0L
 
@@ -98,7 +101,7 @@ object Battle {
     fun tap() {
         state.update { it.copy(myTaps = it.myTaps + 1) }
         when (state.value.role) {
-            Role.REFEREE -> synchronized(myTapTimes) { myTapTimes.addLast(now()) }
+            Role.REFEREE -> myPendingTaps.incrementAndGet()
             Role.PLAYER -> link?.send("T")
             Role.STARTING -> {}
         }
@@ -207,7 +210,7 @@ object Battle {
         recordRx()
         val parts = line.split(' ')
         when (parts[0]) {
-            "T" -> synchronized(theirTapTimes) { theirTapTimes.addLast(now()) }
+            "T" -> theirPendingTaps.incrementAndGet()
             "B" -> state.update {
                 it.copy(
                     peerCharging = parts[1] == "1",
@@ -215,17 +218,7 @@ object Battle {
                     peerBatteryLevel = parts.getOrNull(3)?.toInt(),
                 )
             }
-            "S" -> state.update {
-                it.copy(
-                    theirRate = parts[1].toInt(),
-                    myRate = parts[2].toInt(),
-                    leader = when (parts[3]) {
-                        "P" -> Side.ME
-                        "R" -> Side.THEM
-                        else -> Side.NONE
-                    },
-                )
-            }
+            "S" -> state.update { it.copy(rope = parts[1].toFloat()) }
         }
     }
 
@@ -245,34 +238,30 @@ object Battle {
     }
 
     private suspend fun refereeTickLoop() {
+        var rope = 0f // Referee's view: positive = towards the referee's battery.
+        var last = now()
         while (true) {
             val t = now()
-            val mine = countRecent(myTapTimes, t)
-            val theirs = countRecent(theirTapTimes, t)
-            val leader = when {
-                mine > theirs -> Side.ME
-                theirs > mine -> Side.THEM
-                else -> Side.NONE
-            }
-            state.update { it.copy(myRate = mine, theirRate = theirs, leader = leader) }
-            val code = when (leader) {
-                Side.ME -> "R"
-                Side.THEM -> "P"
-                Side.NONE -> "N"
-            }
-            link?.send("S $mine $theirs $code")
+            val dt = (t - last) / 1000f
+            last = t
+            val pull = myPendingTaps.getAndSet(0) - theirPendingTaps.getAndSet(0)
+            val currentLink = link
+            rope = if (currentLink == null) {
+                0f
+            } else {
+                (rope + pull * TAP_PULL) * (1f - SPRING_BACK_PER_SEC * dt)
+            }.coerceIn(-1f, 1f)
+            state.update { it.copy(rope = rope) }
+            currentLink?.send("S ${"%.3f".format(Locale.US, -rope)}")
 
-            if (link != null && leader != Side.NONE) {
-                val want = if (leader == Side.ME) "sink" else "source"
-                if (want != refereePowerRole && t - lastSwapAt >= MIN_SWAP_INTERVAL_MS) swapTo(want)
+            if (currentLink != null && t - lastSwapAt >= MIN_SWAP_INTERVAL_MS) {
+                when {
+                    rope > SWAP_THRESHOLD && refereePowerRole != "sink" -> swapTo("sink")
+                    rope < -SWAP_THRESHOLD && refereePowerRole != "source" -> swapTo("source")
+                }
             }
             delay(TICK_MS)
         }
-    }
-
-    private fun countRecent(times: ArrayDeque<Long>, t: Long): Int = synchronized(times) {
-        while (times.isNotEmpty() && times.first() < t - WINDOW_MS) times.removeFirst()
-        times.size
     }
 
     private fun swapTo(powerRole: String) {
