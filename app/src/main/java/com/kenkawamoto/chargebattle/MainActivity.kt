@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -16,6 +17,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -83,11 +87,12 @@ private class Particle(val lane: Float, val phase: Float, val size: Float)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
+        enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT))
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         WindowCompat.getInsetsController(window, window.decorView).apply {
-            hide(WindowInsetsCompat.Type.systemBars())
+            // Keep the status bar: its charging icon is proof that power really moved.
+            hide(WindowInsetsCompat.Type.navigationBars())
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
         Battle.start(this)
@@ -137,6 +142,8 @@ private fun BattleScreen() {
             },
     ) {
         val streamEnd = maxHeight * STREAM_END
+        // The UI is upside down, so the status bar sits along our bottom edge.
+        val statusBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
         EnergyCanvas(
             flow = flow,
             rope = if (s.linkUp) s.rope else 0f,
@@ -177,7 +184,7 @@ private fun BattleScreen() {
         Column(
             Modifier
                 .align(Alignment.BottomCenter)
-                .padding(horizontal = 24.dp, vertical = 20.dp),
+                .padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 12.dp + statusBarHeight),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
