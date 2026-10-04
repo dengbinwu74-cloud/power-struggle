@@ -2,7 +2,7 @@
 
 **A two-player tap battle over USB-C where you physically steal battery power from your opponent.**
 
-Connect two phones with a USB-C cable and tap. Whoever is winning *really* gets charged; the loser's battery *really* drains. Built for situations like "it's nearly the last train, both our phones are at 10%, and only one of us is getting home."
+Connect two phones with a USB-C cable and tap. Whoever is winning actually gets charged; the loser's battery really drains. For those "We're both at 5% and neither can make it home, but one of us could survive if they take the other's charge" standoffs.
 
 📖 Project page: **[ideas.skip.work/…/power-struggle](https://ideas.skip.work/u/kenkawakenkenke/projects/power-struggle)**
 
@@ -26,7 +26,7 @@ If the other device isn't running the app (not installed, or an iPad/iPhone), on
 
 ## How it works
 
-**Swapping who charges whom.** A USB-C port on a modern phone can either supply power (source) or receive it (sink). When two phones are connected, USB Power Delivery decides which is which, and the spec also allows a *power role swap* mid-connection without unplugging. That's what Android's "Charge connected device" USB setting does. Power Struggle triggers the same swap from inside the game by running
+**Swapping who charges whom.** A USB-C port on a modern phone can either supply power (source) or receive it (sink). When two phones are connected, USB Power Delivery decides which is which, and the spec also allows a _power role swap_ mid-connection without unplugging. That's what Android's "Charge connected device" USB setting does. Power Struggle triggers the same swap from inside the game by running
 
 ```
 dumpsys usb set-port-roles <port> <source|sink> <host|device>
@@ -34,7 +34,7 @@ dumpsys usb set-port-roles <port> <source|sink> <host|device>
 
 That needs shell-level permission, so the app runs it through [Shizuku](https://shizuku.rikka.app/), which lends an app the permissions of an adb shell. No root required. Only one phone needs this: the swap is negotiated between the two phones, and the other just accepts the request. A swap takes about half a second; afterwards roughly 4.5 W (5 V, 0.9 A on a Pixel) flows the other way.
 
-**Game data over the same cable.** The phone running Shizuku takes the USB *host* role and switches the other phone into [Android Open Accessory](https://source.android.com/docs/core/interaction/accessories/protocol) mode, a protocol originally meant for car head units and docks. That gives the two phones a direct, millisecond-latency data channel for taps and game state. Power role and data role are independent in USB, so the link stays up while power flips back and forth underneath it.
+**Game data over the same cable.** The phone running Shizuku takes the USB _host_ role and switches the other phone into [Android Open Accessory](https://source.android.com/docs/core/interaction/accessories/protocol) mode, a protocol originally meant for car head units and docks. That gives the two phones a direct, millisecond-latency data channel for taps and game state. Power role and data role are independent in USB, so the link stays up while power flips back and forth underneath it.
 
 **Truthful UI.** Each phone's "charging / draining" display comes from its own `BatteryManager` readings, not from game messages, so the screen shows what the battery is actually doing.
 
@@ -45,7 +45,7 @@ Measured on a Pixel 9 Pro XL ↔ Pixel 4 XL: the supplying phone's battery drain
 You need:
 
 - **The "host" phone:** Android 13+, with [Shizuku](https://shizuku.rikka.app/) installed and running (start it via Wireless debugging; it needs restarting after each reboot).
-- **The other device:** another Android phone with USB-C (ideally with this app installed too), or an iPad/USB-C iPhone for one-phone mode.
+- **The other device:** another Android phone with USB-C (ideally with this app installed too, but no need for Shizuku), or an iPad/USB-C iPhone for one-phone mode.
 - A USB-C to USB-C cable that carries data, not just power.
 
 Build and install (JDK 17+):
@@ -66,12 +66,12 @@ This is a proof of concept, tested only on Pixels (and against an iPad).
 
 ## Code tour
 
-| File | What it does |
-|---|---|
-| [`Battle.kt`](app/src/main/java/com/kenkawamoto/powerstruggle/Battle.kt) | Game state, tug-of-war rope, one/two-phone mode detection, wire protocol |
-| [`PowerControl.kt`](app/src/main/java/com/kenkawamoto/powerstruggle/PowerControl.kt), [`ShellService.kt`](app/src/main/java/com/kenkawamoto/powerstruggle/ShellService.kt) | Shizuku user service that runs `dumpsys usb` as the shell user |
-| [`UsbLink.kt`](app/src/main/java/com/kenkawamoto/powerstruggle/UsbLink.kt) | Android Open Accessory host and accessory ends of the data link |
-| [`MainActivity.kt`](app/src/main/java/com/kenkawamoto/powerstruggle/MainActivity.kt) | Compose UI: energy stream, knot, battery gauge, split screen |
+| File                                                                                                                                                                       | What it does                                                             |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| [`Battle.kt`](app/src/main/java/com/kenkawamoto/powerstruggle/Battle.kt)                                                                                                   | Game state, tug-of-war rope, one/two-phone mode detection, wire protocol |
+| [`PowerControl.kt`](app/src/main/java/com/kenkawamoto/powerstruggle/PowerControl.kt), [`ShellService.kt`](app/src/main/java/com/kenkawamoto/powerstruggle/ShellService.kt) | Shizuku user service that runs `dumpsys usb` as the shell user           |
+| [`UsbLink.kt`](app/src/main/java/com/kenkawamoto/powerstruggle/UsbLink.kt)                                                                                                 | Android Open Accessory host and accessory ends of the data link          |
+| [`MainActivity.kt`](app/src/main/java/com/kenkawamoto/powerstruggle/MainActivity.kt)                                                                                       | Compose UI: energy stream, knot, battery gauge, split screen             |
 
 ## License
 
