@@ -34,8 +34,10 @@ data class BattleState(
     val leader: Side = Side.NONE,
     val charging: Boolean = false,
     val currentMa: Int = 0,
+    val batteryLevel: Int = 0,
     val peerCharging: Boolean? = null,
     val peerCurrentMa: Int = 0,
+    val peerBatteryLevel: Int? = null,
     val rxPerSec: Int = 0,
     val maxGapMs: Long = 0,
     val linkDrops: Int = 0,
@@ -53,7 +55,7 @@ data class BattleState(
  * Wire protocol (newline-delimited):
  *   player → referee: `T` (one tap), `H <seq>` (heartbeat)
  *   referee → player: `S <refereeRate> <playerRate> <R|P|N leader>` (every tick)
- *   both ways:        `B <plugged 0|1> <battery mA>`
+ *   both ways:        `B <plugged 0|1> <battery mA> <battery %>`
  */
 @SuppressLint("StaticFieldLeak") // Holds the application context only.
 object Battle {
@@ -136,16 +138,27 @@ object Battle {
             return
         }
         log("${port.id}: ${port.powerRole}/${port.dataRole} connected=${port.connected}")
-        refereePowerRole = port.powerRole
-        if (port.dataRole != "host") {
-            power.setRoles(port.powerRole, "host")
-            log("Took USB host role")
-            delay(1500)
-        }
 
         scope.launch { refereeTickLoop() }
         val host = AoaHost(app, ::log)
-        connectLoop(host::tryConnect)
+        connectLoop({ onLine, onClosed ->
+            ensureUsbHost()
+            host.tryConnect(onLine, onClosed)
+        })
+    }
+
+    /**
+     * The referee must be USB host to drive the accessory link. USB resets (e.g. toggling USB
+     * debugging, replugging) fall back to default roles, so re-check whenever the link is down.
+     */
+    private fun ensureUsbHost() {
+        val port = power.readPort() ?: return
+        if (!port.connected) return
+        refereePowerRole = port.powerRole
+        if (port.dataRole != "host") {
+            power.setRoles(port.powerRole, "host")
+            log("Took USB host role (was ${port.powerRole}/${port.dataRole})")
+        }
     }
 
     private suspend fun runPlayer() {
@@ -195,7 +208,13 @@ object Battle {
         val parts = line.split(' ')
         when (parts[0]) {
             "T" -> synchronized(theirTapTimes) { theirTapTimes.addLast(now()) }
-            "B" -> state.update { it.copy(peerCharging = parts[1] == "1", peerCurrentMa = parts[2].toInt()) }
+            "B" -> state.update {
+                it.copy(
+                    peerCharging = parts[1] == "1",
+                    peerCurrentMa = parts[2].toInt(),
+                    peerBatteryLevel = parts.getOrNull(3)?.toInt(),
+                )
+            }
             "S" -> state.update {
                 it.copy(
                     theirRate = parts[1].toInt(),
@@ -277,10 +296,11 @@ object Battle {
         while (true) {
             val sticky = app.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
             val plugged = (sticky?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
+            val level = battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
             // Positive = into the battery, in µA on Pixels.
             val ma = battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW) / 1000
-            state.update { it.copy(charging = plugged, currentMa = ma) }
-            if (ticks++ % 2 == 0) link?.send("B ${if (plugged) 1 else 0} $ma")
+            state.update { it.copy(charging = plugged, currentMa = ma, batteryLevel = level) }
+            if (ticks++ % 2 == 0) link?.send("B ${if (plugged) 1 else 0} $ma $level")
             delay(250)
         }
     }
