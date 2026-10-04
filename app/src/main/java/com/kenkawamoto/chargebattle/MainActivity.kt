@@ -44,6 +44,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.changedToDown
@@ -155,9 +156,10 @@ private fun BattleScreen() {
         Column(
             Modifier
                 .align(Alignment.TopCenter)
-                .offset(y = streamEnd + 216.dp),
+                .offset(y = streamEnd + 208.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            Text("${s.batteryLevel}%", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
             Text(
                 when (flow) {
                     Flow.NONE -> "Connect the other phone"
@@ -327,9 +329,10 @@ private fun BatteryGauge(level: Int, flow: Flow, color: Color, modifier: Modifie
                 size = Size(size.width - inset * 2, fillH),
                 cornerRadius = CornerRadius(10.dp.toPx()),
             )
-            if (flow == Flow.IN) drawBolt(Offset(size.width / 2, bodyTop + bodyH / 2), bodyH * 0.45f)
+            if (flow == Flow.IN) {
+                drawBolt(Offset(size.width / 2, bodyTop + bodyH / 2), bodyH * 0.6f * (0.92f + 0.08f * pulse))
+            }
         }
-        Text("$level%", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Black)
     }
 }
 
@@ -344,7 +347,8 @@ private fun DrawScope.drawBolt(center: Offset, h: Float) {
         lineTo(center.x + w * 0.02f, center.y - h * 0.08f)
         close()
     }
-    drawPath(path, Color.White.copy(alpha = 0.35f))
+    drawPath(path, Color(0xFF0D0E11), style = Stroke(5.dp.toPx(), join = StrokeJoin.Round))
+    drawPath(path, Color.White)
 }
 
 @Composable
