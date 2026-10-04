@@ -182,7 +182,7 @@ private fun BattleScreen() {
                 when (flow) {
                     Flow.NONE -> ""
                     Flow.IN -> "keep tapping to hold it"
-                    Flow.OUT -> "TAP TO PULL IT BACK!"
+                    Flow.OUT -> "TAP TO STEAL CHARGE!"
                 },
                 color = Color.White.copy(alpha = if (flow == Flow.OUT) 0.9f else 0.4f),
                 fontSize = if (flow == Flow.OUT) 22.sp else 16.sp,
@@ -246,7 +246,8 @@ private fun EnergyCanvas(
 
         // Particles.
         if (flow != Flow.NONE) {
-            val speed = 0.3f + 1.1f * intensity
+            // Constant speed so the direction stays readable; only the density follows intensity.
+            val speed = 0.5f
             val count = (20 + 60 * intensity).toInt()
             particles.take(count).forEach { p ->
                 val progress = (p.phase + t * speed * (0.75f + 0.5f * p.size)) % 1f
